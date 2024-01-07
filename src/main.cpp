@@ -19,7 +19,8 @@
 
 #include "Palettes.h"
 
-
+using std::sin;
+using std::cos;
 
 struct sRGBPixel
 {
@@ -35,21 +36,21 @@ void tonemap(std::vector<sRGBPixel> & image_LDR, const std::vector<vec3f> & imag
 	const auto sRGB = [](float u) -> float { return (u <= 0.0031308f) ? 12.92f * u : 1.055f * std::pow(u, 0.416667f) - 0.055f; };
 	const float scale = 1.0f / passes;
 
-	#pragma omp parallel for
+#pragma omp parallel for
 	for (int y = 0; y < yres; y++)
-	for (int x = 0; x < xres; x++)
-	{
-		const int pixel_idx = y * xres + x;
-		vec3f pixel_colour = image_HDR[pixel_idx] * scale;
-
-		image_LDR[pixel_idx] =
+		for (int x = 0; x < xres; x++)
 		{
-			(uint8_t)std::max(0.0f, std::min(255.0f, sRGB(pixel_colour.x()) * 256)),
-			(uint8_t)std::max(0.0f, std::min(255.0f, sRGB(pixel_colour.y()) * 256)),
-			(uint8_t)std::max(0.0f, std::min(255.0f, sRGB(pixel_colour.z()) * 256)),
-			255
-		};
-	}
+			const int pixel_idx = y * xres + x;
+			vec3f pixel_colour = image_HDR[pixel_idx] * scale;
+
+			image_LDR[pixel_idx] =
+			{
+				(uint8_t)std::max(0.0f, std::min(255.0f, sRGB(pixel_colour.x()) * 256)),
+				(uint8_t)std::max(0.0f, std::min(255.0f, sRGB(pixel_colour.y()) * 256)),
+				(uint8_t)std::max(0.0f, std::min(255.0f, sRGB(pixel_colour.z()) * 256)),
+				255
+			};
+		}
 }
 
 
@@ -101,8 +102,29 @@ inline real triDist(real v)
 	return v;
 }
 
+// TRIGNARL CODE
+const real isqrt3 = 1. / std::sqrt(3);
+const real isqrt3x2 = 2. * isqrt3;
 
-int main(int argc, char ** argv)
+inline vec2d triGnarls(const real x, const real y)
+{
+	const real f = sin(isqrt3x2 * x);
+	const real g = sin(isqrt3 * x + y);
+	const real h = sin(isqrt3 * x - y);
+	const real fx = isqrt3x2 * cos(isqrt3x2 * x);
+	// const real fy = 0.;
+	const real gx = isqrt3 * cos(isqrt3 * x + y);
+	const real gy = cos(isqrt3 * x + y);
+	const real hx = isqrt3 * cos(isqrt3 * x - y);
+	const real hy = -cos(isqrt3 * x - y);
+	return vec2d(
+		f * gy * h + f * g * hy,
+		-(fx * g * h + f * gx * h + f * g * hx)
+	);
+}
+
+
+int main(int argc, char** argv)
 {
 #if _WIN32
 	SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
@@ -114,17 +136,17 @@ int main(int argc, char ** argv)
 	std::vector<vec3f>     image_hdr(xres * yres);
 	std::vector<sRGBPixel> image_ldr(xres * yres);
 
-	const auto save_tonemapped_buffer = [&](const char * channel_name, const int frame, const int passes, const std::vector<vec3f> & buffer)
-	{
-		// Tonemap and convert to LDR sRGB
-		tonemap(image_ldr, buffer, passes, xres, yres);
+	const auto save_tonemapped_buffer = [&](const char * channel_name, const int frame, const int passes, const std::vector<vec3f>& buffer)
+		{
+			// Tonemap and convert to LDR sRGB
+			tonemap(image_ldr, buffer, passes, xres, yres);
 
-		// Save frame
-		char filename[128];
-		snprintf(filename, 128, "../frames/%s_frame_%08d.png", channel_name, frame);
-		stbi_write_png(filename, xres, yres, 4, &image_ldr[0], xres * 4);
-		printf("Saved %s with %d passes\n", filename, passes);
-	};
+			// Save frame
+			char filename[128];
+			snprintf(filename, 128, "../frames/%s_frame_%08d.png", channel_name, frame);
+			stbi_write_png(filename, xres, yres, 4, &image_ldr[0], xres * 4);
+			printf("Saved %s with %d passes\n", filename, passes);
+		};
 
 	constexpr int num_frames = 60 * 2;
 
@@ -159,47 +181,47 @@ int main(int argc, char ** argv)
 		const vec2d  k0   = vec2d(RadicalInverse<2>(seed), RadicalInverse<3>(seed)) * 0.2 - 0.1;
 		const double pdj_scale = (RadicalInverse<3>(seed) + 0.5) / two_pi;
 
-		#pragma omp parallel for
+#pragma omp parallel for
 		for (int y = 0; y < yres; y++)
-		for (int x = 0; x < xres; x++)
-		{
-			const int       pixel_idx = y * xres + x;
-			const double pixel_sample = hash(pixel_idx) * (1.0 / (1ull << 32));
-
-			vec3f sample_sum(0);
-			for (int i = 0; i < num_samples; ++i)
+			for (int x = 0; x < xres; x++)
 			{
-				const double time_u = wrap1r(pixel_sample, i * inv_num_samples) * 1.0;
-				const double t = (frame + 0.5 + triDist(time_u)) / num_frames;
-				const vec2d u(
-					wrap1r(pixel_sample, RadicalInverse<2>(i)),
-					wrap1r(pixel_sample, RadicalInverse<3>(i))
-				);
-				vec2d p(
-					1 - 2 * (x + 0.5 + triDist(u.x())) * inv_xres,
-					1 - 2 * (y + 0.5 + triDist(u.y())) * inv_yres);
-				p.y() *= aspect;
-				p *= scale;
+				const int       pixel_idx = y * xres + x;
+				const double pixel_sample = hash(pixel_idx) * (1.0 / (1ull << 32));
 
-				const double a = t * two_pi;
-				const vec2d  k = k0 + vec2d(std::cos(a), std::sin(a)) * 0.035;
-
-				const vec2d centre(0);
-				const double distance0 = length(p - centre) * 5 + 1;
-
-				for (int z = 0; z < num_iters; z++)
+				vec3f sample_sum(0);
+				for (int i = 0; i < num_samples; ++i)
 				{
-					const vec2d sin_swapped(
-						std::sin(two_pi * p.y()),
-						std::sin(two_pi * p.x()));
-					p += k - sin_swapped * pdj_scale;
+					const double time_u = wrap1r(pixel_sample, i * inv_num_samples) * 1.0;
+					const double t = (frame + 0.5 + triDist(time_u)) / num_frames;
+					const vec2d u(
+						wrap1r(pixel_sample, RadicalInverse<2>(i)),
+						wrap1r(pixel_sample, RadicalInverse<3>(i))
+					);
+					vec2d p(
+						1 - 2 * (x + 0.5 + triDist(u.x())) * inv_xres,
+						1 - 2 * (y + 0.5 + triDist(u.y())) * inv_yres);
+					p.y() *= aspect;
+					p *= scale;
+
+					const double a = t * two_pi;
+					const vec2d  k = k0 + vec2d(std::cos(a), std::sin(a)) * 0.035;
+
+					const vec2d centre(0);
+					const double distance0 = length(p - centre) * 5 + 1;
+
+					real total_dist = 0.;
+					for (int z = 0; z < num_iters; z++)
+					{
+						const vec2d v_incr = triGnarls(two_pi * p.x(), two_pi * p.y()) * 0.04;
+						p += v_incr;
+						total_dist += 30. * std::sqrt(v_incr.x() * v_incr.x() + v_incr.y() * v_incr.y());
+					}
+
+					sample_sum += pal[(int)std::floor(total_dist) % pal_size];
 				}
 
-				sample_sum += pal[(int)std::floor(length(p) / distance0 * 3) % pal_size];
+				image_hdr[pixel_idx] = sample_sum;
 			}
-
-			image_hdr[pixel_idx] = sample_sum;
-		}
 
 		save_tonemapped_buffer("pdj", frame, num_samples, image_hdr);
 	}
